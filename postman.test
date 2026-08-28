@@ -1,0 +1,209 @@
+Riya backend — Postman test checklist
+=====================================
+
+Base URL: `http://localhost:3001/api/v1`
+
+Create a Postman environment with these variables:
+
+```text
+baseUrl = http://localhost:3001/api/v1
+accessToken = 22222222-2222-2222-2222-222222222222
+adminAccessToken = 11111111-1111-1111-1111-111111111111
+productId =
+variantId =
+orderId =
+categoryId =
+```
+
+Start the backend:
+
+```bash
+cd Riya-backend/riya-backend
+npm run start:dev
+```
+
+Before testing, create `riya_local` in DBeaver and run `riya-backend/database/local/setup.sql`. It creates all tables plus local demo users, products, variants, settings and contact information.
+
+Public requests (no Authorization header)
+-----------------------------------------
+
+### Health
+
+`GET {{baseUrl}}/health`
+
+Expected: `success: true`, `data.status: "ok"`.
+
+### Categories
+
+`GET {{baseUrl}}/categories`
+
+Copy any `data[0].id` to `categoryId`.
+
+### Products
+
+`GET {{baseUrl}}/products?page=1&limit=20`
+
+`GET {{baseUrl}}/products?search=gingelly`
+
+`GET {{baseUrl}}/products?category=gingelly-oil`
+
+Copy `data.items[0].id` to `productId` and `data.items[0].product_variants[0].id` to `variantId`.
+
+You can use this Postman **Tests** script after the product-list request to save them automatically:
+
+```javascript
+const product = pm.response.json().data.items[0];
+pm.environment.set('productId', product.id);
+pm.environment.set('variantId', product.product_variants[0].id);
+```
+
+### Product detail
+
+`GET {{baseUrl}}/products/{{productId}}`
+
+### Store and contact information
+
+`GET {{baseUrl}}/settings`
+
+`GET {{baseUrl}}/content/contact`
+
+### Guest checkout
+
+`POST {{baseUrl}}/orders`
+
+Header: `Content-Type: application/json`
+
+```json
+{
+  "items": [
+    { "variantId": "{{variantId}}", "quantity": 2 }
+  ],
+  "customer": {
+    "name": "Demo Guest",
+    "phone": "9876543210",
+    "email": "guest@example.com"
+  },
+  "shippingAddress": {
+    "addressLine": "12 Demo Street",
+    "city": "Coimbatore",
+    "district": "Coimbatore",
+    "state": "Tamil Nadu",
+    "pincode": "641001"
+  }
+}
+```
+
+Expected: the server calculates `subtotal`, `shipping_fee`, and `total`; prices supplied by a client are ignored. Save the returned order id with this Tests script:
+
+```javascript
+pm.environment.set('orderId', pm.response.json().data.id);
+```
+
+Customer requests (Bearer `{{accessToken}}`)
+---------------------------------------------
+
+During local PostgreSQL development, the Bearer value is the seeded customer UUID above. A guest order is deliberately not visible through these endpoints.
+
+`GET {{baseUrl}}/orders`
+
+`GET {{baseUrl}}/orders/{{orderId}}`
+
+`PATCH {{baseUrl}}/orders/{{orderId}}/cancel`
+
+Cancellation is allowed only while an order is `PENDING` or `CONFIRMED`.
+
+To create an order attached to the customer, repeat guest checkout with `Authorization: Bearer {{accessToken}}`.
+
+Admin requests (Bearer `{{adminAccessToken}}`)
+----------------------------------------------
+
+For local development, use the seeded admin UUID above. It maps to an ADMIN profile in the local database. When Supabase is enabled later, replace this local-only bearer mechanism with Supabase Auth:
+
+```sql
+update public.profiles set role = 'ADMIN' where user_id = '<auth-user-uuid>';
+```
+
+### Categories
+
+`POST {{baseUrl}}/admin/categories`
+
+```json
+{ "name": "Demo Oils", "slug": "demo-oils", "description": "Temporary test category", "isActive": true }
+```
+
+`PATCH {{baseUrl}}/admin/categories/{{categoryId}}` — use the same body with changed values.
+
+`DELETE {{baseUrl}}/admin/categories/{{categoryId}}`
+
+### Products
+
+`GET {{baseUrl}}/admin/products?page=1&limit=20`
+
+`POST {{baseUrl}}/admin/products`
+
+```json
+{
+  "name": "Postman Test Oil",
+  "slug": "postman-test-oil",
+  "description": "A test-only product created from Postman.",
+  "shortDescription": "Test oil",
+  "categoryId": "{{categoryId}}",
+  "weight": "1L",
+  "ingredients": "Demo ingredients",
+  "thumbnailUrl": "https://placehold.co/800x800?text=Test+Oil",
+  "images": ["https://placehold.co/800x800?text=Test+Oil"],
+  "isFeatured": false,
+  "isActive": true,
+  "variants": [
+    { "name": "1L", "size": 1, "unit": "L", "sku": "POSTMAN-TEST-1L", "price": 250, "salePrice": 225, "stock": 10, "isActive": true }
+  ]
+}
+```
+
+`GET {{baseUrl}}/admin/products/{{productId}}`
+
+`PATCH {{baseUrl}}/admin/products/{{productId}}` — send the complete product body above; change only desired values.
+
+`PATCH {{baseUrl}}/admin/products/variants/{{variantId}}`
+
+```json
+{ "name": "1L", "size": 1, "unit": "L", "sku": "POSTMAN-TEST-1L", "price": 250, "salePrice": 225, "stock": 25, "isActive": true }
+```
+
+`DELETE {{baseUrl}}/admin/products/{{productId}}`
+
+### Orders, customers, dashboard
+
+`GET {{baseUrl}}/admin/orders?status=PENDING&search=Demo&page=1&limit=20`
+
+`GET {{baseUrl}}/admin/orders/{{orderId}}`
+
+`PATCH {{baseUrl}}/admin/orders/{{orderId}}/status`
+
+```json
+{ "status": "CONFIRMED", "note": "Confirmed during Postman test" }
+```
+
+Allowed normal lifecycle: `PENDING → CONFIRMED → PROCESSING → PACKED → SHIPPED → DELIVERED`. An admin can also cancel a PENDING or CONFIRMED order.
+
+`GET {{baseUrl}}/admin/customers`
+
+`GET {{baseUrl}}/admin/customers/<customer-auth-user-id>`
+
+`GET {{baseUrl}}/admin/customers/<customer-auth-user-id>/orders`
+
+`GET {{baseUrl}}/admin/dashboard/stats`
+
+### Settings and contact content
+
+`PATCH {{baseUrl}}/admin/settings`
+
+```json
+{ "storeName": "Riya Demo Store", "currency": "INR", "shippingFee": 50, "freeShippingThreshold": 999, "supportPhone": "9876543210", "supportEmail": "support@riya.demo" }
+```
+
+`PATCH {{baseUrl}}/admin/content/contact`
+
+```json
+{ "businessName": "Riya Demo Store", "phone": "9876543210", "email": "hello@riya.demo", "whatsapp": "919876543210", "address": "123 Market Road, Coimbatore", "businessHours": "Mon-Sat, 9 AM - 6 PM" }
+```
